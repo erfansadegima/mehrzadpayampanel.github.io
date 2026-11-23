@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#14532d">
+<title>CRM SMS Sender</title>
+<link rel="manifest" href="manifest.webmanifest">
+<style>
+:root{font-family:Tahoma,Arial,sans-serif;color:#17212b;background:#f4f6f8}
+*{box-sizing:border-box}body{margin:0;padding:18px;max-width:760px;margin-inline:auto}
+h1{font-size:22px;margin:8px 0}p{line-height:1.8;color:#52606d}
+.card{background:white;border:1px solid #e1e6eb;border-radius:16px;padding:16px;margin:14px 0;box-shadow:0 2px 8px #00000008}
+label{display:block;font-weight:700;margin:12px 0 7px}
+input,select,textarea,button{font:inherit;width:100%;padding:12px;border:1px solid #cbd5df;border-radius:10px;background:white}
+textarea{min-height:110px;resize:vertical}
+button{border:0;background:#166534;color:white;font-weight:700;cursor:pointer;margin-top:10px}
+button.secondary{background:#e8eef2;color:#1f2937}
+button:disabled{opacity:.45;cursor:not-allowed}
+.row{display:flex;gap:10px}.row>*{flex:1}
+.stats{display:flex;gap:8px;flex-wrap:wrap}.pill{background:#eef5ef;padding:8px 12px;border-radius:20px;font-size:13px}
+.small{font-size:12px;color:#667085}.number{font-size:24px;font-weight:700;direction:ltr;text-align:right}
+.notice{background:#fff7e6;border:1px solid #f4d58d;border-radius:12px;padding:12px;line-height:1.8;font-size:13px}
+.good{color:#166534}.bad{color:#b42318}
+#preview{max-height:220px;overflow:auto;font-size:13px}table{width:100%;border-collapse:collapse}td,th{padding:7px;border-bottom:1px solid #eee;text-align:right}
+</style>
+</head>
+<body>
+<h1>CRM SMS Sender</h1>
+<p>ارسال مرحله‌ای پیامک از برنامه پیامک گوشی؛ شماره‌ها از فایل Excel خوانده می‌شوند و هیچ فایلی به سرور ارسال نمی‌شود.</p>
+
+<div class="card">
+  <label for="file">۱) انتخاب فایل Excel</label>
+  <input id="file" type="file" accept=".xlsx,.xls,.csv">
+  <p class="small">بهتر است ردیف اول فایل عنوان ستون‌ها باشد؛ مثلاً «موبایل» یا «شماره همراه».</p>
+  <label for="sheet">برگه (Sheet)</label><select id="sheet" disabled></select>
+  <label for="col">ستون شماره موبایل</label><select id="col" disabled></select>
+  <button id="load" disabled>خواندن شماره‌ها</button>
+  <div id="importStatus" class="small"></div>
+</div>
+
+<div class="card">
+  <label for="message">۲) متن پیامک</label>
+  <textarea id="message" placeholder="متن پیامک را اینجا بنویسید..."></textarea>
+  <div class="small" id="charCount">۰ کاراکتر</div>
+</div>
+
+<div class="card">
+  <div class="stats">
+    <span class="pill">کل شماره‌ها: <b id="total">۰</b></span>
+    <span class="pill">انجام‌شده: <b id="done">۰</b></span>
+    <span class="pill">باقی‌مانده: <b id="left">۰</b></span>
+  </div>
+  <label>۳) شماره بعدی</label>
+  <div id="current" class="number">—</div>
+  <div class="row">
+    <button id="openSms" disabled>باز کردن برنامه پیامک</button>
+    <button id="markDone" class="secondary" disabled>ارسال شد؛ بعدی</button>
+  </div>
+  <button id="skip" class="secondary" disabled>رد کردن این شماره</button>
+  <div id="progress" class="small"></div>
+</div>
+
+<div class="card">
+  <label>پیش‌نمایش شماره‌ها</label>
+  <div id="preview" class="small">هنوز فایلی بارگذاری نشده است.</div>
+</div>
+
+<div class="notice">
+<strong>نحوه کار:</strong> روی «باز کردن برنامه پیامک» بزنید؛ پیام در برنامه پیامک گوشی با شماره و متن آماده می‌شود. خودتان دکمه ارسال را در برنامه پیامک می‌زنید، سپس به این صفحه برگردید و «ارسال شد؛ بعدی» را انتخاب کنید.
+<br><br>
+این برنامه وضعیت تحویل پیامک را از اپراتور دریافت نمی‌کند؛ ثبت «ارسال شد» دستی است. هزینه پیامک طبق تعرفه سیم‌کارت شما محاسبه می‌شود. فقط برای مخاطبانی پیام بفرستید که مجوز دریافت پیام را داده‌اند.
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let workbook=null, contacts=[], index=0, done=new Set(), skipped=new Set(), rows=[];
+const faDigits = s => String(s).replace(/[۰-۹]/g,d=>"۰۱۲۳۴۵۶۷۸۹".indexOf(d)).replace(/[٠-٩]/g,d=>"٠١٢٣٤٥٦٧٨٩".indexOf(d));
+function normalizePhone(v){
+  let s=faDigits(v ?? "").trim().replace(/[\\s\\-()،]/g,"");
+  if(!s) return "";
+  if(s.startsWith("00")) s="+"+s.slice(2);
+  if(s.startsWith("09") && s.length===11) return s;
+  if(s.startsWith("9") && s.length===10) return "0"+s;
+  if(s.startsWith("+")) return s;
+  if(/^0\\d{10}$/.test(s)) return s;
+  return "";
+}
+function update(){
+  const c=contacts[index];
+  $("current").textContent=c || (contacts.length ? "پایان فهرست" : "—");
+  $("total").textContent=contacts.length;
+  $("done").textContent=done.size;
+  $("left").textContent=Math.max(0,contacts.length-done.size-skipped.size);
+  $("openSms").disabled=!c || !$("message").value.trim();
+  $("markDone").disabled=!c;
+  $("skip").disabled=!c;
+  $("progress").textContent=contacts.length ? `مورد ${Math.min(index+1,contacts.length)} از ${contacts.length}` : "";
+  $("preview").innerHTML=contacts.length ? `<table><thead><tr><th>ردیف</th><th>شماره</th><th>وضعیت</th></tr></thead><tbody>${contacts.slice(0,100).map((n,i)=>`<tr><td>${i+1}</td><td dir="ltr">${n}</td><td>${done.has(n)?"ثبت‌شده":skipped.has(n)?"ردشده":"در انتظار"}</td></tr>`).join("")}</tbody></table>` : "هنوز فایلی بارگذاری نشده است.";
+}
+function nextPending(){while(index<contacts.length && (done.has(contacts[index])||skipped.has(contacts[index]))) index++;update();}
+$("file").addEventListener("change", async e=>{
+  const f=e.target.files[0]; if(!f)return;
+  if(!window.XLSX){$("importStatus").textContent="کتابخانه خواندن Excel بارگذاری نشد؛ اینترنت را بررسی و صفحه را دوباره باز کنید.";return;}
+  try{
+    const data=await f.arrayBuffer(); workbook=XLSX.read(data,{type:"array"});
+    $("sheet").innerHTML=workbook.SheetNames.map((s,i)=>`<option value="${i}">${s}</option>`).join("");
+    $("sheet").disabled=false; loadColumns(); $("load").disabled=false;
+    $("importStatus").textContent="فایل آماده است. برگه و ستون شماره را انتخاب کنید.";
+  }catch(err){$("importStatus").textContent="خواندن فایل ناموفق بود. لطفاً فایل XLSX معتبر انتخاب کنید.";}
+});
+function loadColumns(){
+  const name=workbook.SheetNames[Number($("sheet").value)||0];
+  const ws=workbook.Sheets[name];
+  rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+  const headers=(rows[0]||[]).map((v,i)=>String(v||`ستون ${i+1}`));
+  $("col").innerHTML=headers.map((h,i)=>`<option value="${i}">${h}</option>`).join("");
+  const guess=headers.findIndex(h=>/موبایل|همراه|تلفن|شماره|mobile|phone/i.test(h));
+  if(guess>=0)$("col").value=guess;
+  $("col").disabled=false;
+}
+$("sheet").addEventListener("change",loadColumns);
+$("load").addEventListener("click",()=>{
+  const c=Number($("col").value);
+  const start=rows.length && isNaN(Number(rows[0][c])) ? 1 : 0;
+  const found=rows.slice(start).map(r=>normalizePhone(r[c])).filter(Boolean);
+  contacts=[...new Set(found)]; index=0;done=new Set();skipped=new Set();nextPending();
+  $("importStatus").textContent=`${found.length} شماره معتبر پیدا شد؛ ${contacts.length} شماره یکتا پس از حذف تکراری‌ها باقی ماند.`;
+});
+$("message").addEventListener("input",()=>{
+  $("charCount").textContent=faDigits($("message").value.length)+" کاراکتر";
+  $("openSms").disabled=!contacts[index]||!$("message").value.trim();
+});
+$("openSms").addEventListener("click",()=>{
+  const n=contacts[index], msg=$("message").value.trim(); if(!n||!msg)return;
+  const href=`sms:${encodeURIComponent(n)}?body=${encodeURIComponent(msg)}`;
+  window.location.href=href;
+});
+$("markDone").addEventListener("click",()=>{if(contacts[index])done.add(contacts[index]);index++;nextPending();});
+$("skip").addEventListener("click",()=>{if(contacts[index])skipped.add(contacts[index]);index++;nextPending();});
+if("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("./sw.js").catch(()=>{});
+update();
+</script>
+</body>
+</html>
